@@ -1,0 +1,13 @@
+[package]
+name = "crime-report"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = "4.0"
+github-rs = "0.7"
+serde_json = "1.0"
+serde = "1.0"
+serde_derive = "1.0"
+iso8601-timestamp = "0.1.11"
+rayon = "1.5"
