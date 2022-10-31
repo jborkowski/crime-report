@@ -61,8 +61,8 @@ fn main() {
 
     let gh_token = std::env::var("GH_TOKEN").expect("GH_TOKEN must be set.");
     let clientg = Github::new(gh_token).expect("Failed to create Github client");
-    let since = Timestamp::parse("2022-08-01T00:00:00Z").expect("Failed to parse 'since' date");
-    let until = Timestamp::parse("2022-09-30T23:59:59Z").expect("Failed to parse 'until' date");
+    let since = Timestamp::parse("2022-10-01T00:00:00Z").expect("Failed to parse 'since' date");
+    let until = Timestamp::parse("2022-10-31T23:59:59Z").expect("Failed to parse 'until' date");
 
 
     let results: Vec<(String, HashMap<u32, Vec<PullCommit>>)> = organization_repositories(&clientg, owner)
@@ -90,12 +90,12 @@ fn print_result(results: &Vec<(String, HashMap<u32, Vec<PullCommit>>)>) -> Strin
 	.into_iter()
 	.for_each(|(project, pulls)| {
 	    if !pulls.is_empty() {
-		let repo = format!("* Repository: {}\n", project);
+		let repo = format!("\tKontrybucja do repozytorium kodu \"{}\":\n", project);
 		out.push_str(&repo);
 
 		pulls.iter().for_each(|(pull, commits)| {
 		    commits.first().iter().for_each(|f| {
-			let pull = format!("** #{}: {} ({})\n", pull, f.pull.title, print_commits(&commits));
+			let pull = format!("\t\t#{}: {} ({})\n", pull, f.pull.title, print_commits(&commits));
 			out.push_str(&pull);
 		    })
 		});
@@ -106,7 +106,7 @@ fn print_result(results: &Vec<(String, HashMap<u32, Vec<PullCommit>>)>) -> Strin
 }
 
 fn print_commits(commits: &Vec<PullCommit>) -> String {
-    commits.into_iter().map(|cp| &cp.sha[0..6]).collect::<Vec<_>>().join(", ")
+    commits.into_iter().map(|cp| &cp.sha[0..7]).collect::<Vec<_>>().join(", ")
 }
 
 fn organization_repositories(client: &Github, owner: &str) -> Vec<Repo> {
@@ -192,6 +192,6 @@ fn activity_for(client: &Github, owner: &str, repo_name: &str, user_login: &str,
 
     });
 
-	results
+    results
 
 }
