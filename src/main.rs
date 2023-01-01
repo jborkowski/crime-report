@@ -1,197 +1,265 @@
 use std::collections::HashMap;
-use clap::{command, Command, Parser};
-use std::env::var;
-use github_rs::client::{Github, Executor};
-use iso8601_timestamp::Timestamp;
-use serde_derive::Deserialize;
-use rayon::prelude::*;
+use octocrab::models::pulls::PullRequest;
+use octocrab::models::repos::RepoCommit;
+use clap::{Parser, command, arg};
+use chrono::naive::NaiveDate;
+use chrono::{DateTime, Datelike, Local, Utc};
+use chrono::TimeZone;
+use octocrab::{Octocrab, Page, Result, params};
+use tokio::sync::mpsc;
 
-#[derive(Deserialize, Debug)]
-struct Repo {
-//    archived: bool,
-    name: String
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+#[command(next_line_help = true)]
+struct Cli {
+    #[arg(long)]
+    #[arg(short = 's')]
+    #[arg(default_value_t = default_since())]
+    since: NaiveDate,
+    #[arg(long)]
+    #[arg(short = 'u')]
+    #[arg(default_value_t = default_until())]
+    until: NaiveDate,
+
+    #[arg(long, default_value_t = String::from("restaumatic"))]
+    owner: String,
+
+    #[arg(long, short = 'U')]
+    user: String,
+
+    #[arg(long, default_value_t = std::env::var("GH_TOKEN").expect("GH_TOKEN must be set"))]
+    gh_token: String
 }
 
-#[derive(Deserialize)]
-struct User {
-   login: String
+fn default_since() -> NaiveDate {
+    let local: DateTime<Local> = Local::now();
+    NaiveDate::from_ymd_opt(local.year(), local.month(), 1).unwrap()
 }
 
-#[derive(Deserialize)]
-struct PR {
-    id: u32,
-    number: u32,
-    user: User,
-    created_at: Timestamp,
-    updated_at: Timestamp
+fn default_until() -> NaiveDate {
+    let local: DateTime<Local> = Local::now();
+    NaiveDate::from_ymd_opt(local.year(), local.month(), local.day()).unwrap()
 }
 
-#[derive(Deserialize)]
-struct CommitSHA {
-    sha: String,
+#[derive(Debug)]
+enum Command {
+    Set {
+        key: String,
+        val: Vec<String>,
+    },
 }
 
-#[derive(Deserialize)]
-struct Pull {
-    url: String,
-    id: u32,
-    number: u32,
-    state: String,
-    title: String,
-    user: User,
-    created_at: Timestamp,
-    updated_at: Timestamp,
-    closed_at: Option<Timestamp>,
-    merged_at: Option<Timestamp>,
-    merge_commit_sha: String,
-    assignee: Option<User>,
-    requested_reviewers: Vec<User>,
+#[tokio::main]
+async fn main() -> octocrab::Result<()> {
+
+    let cli = Cli::parse();
+
+    println!("Fetching activities for user: '{}' in '{}' organization ({} - {})\n", cli.user, cli.owner, cli.since, cli.until);
+
+    let since = Utc.from_utc_datetime(&cli.since.and_hms_opt(0,0,0).unwrap());
+    let until = Utc.from_utc_datetime(&cli.until.and_hms_opt(0,0,0).unwrap());
+
+    let octocrab = octocrab::Octocrab::builder()
+        .personal_token(cli.gh_token)
+        .build()?;
+
+    let (tx, mut rx) = mpsc::channel(100);
+
+    let repos: Vec<String> = get_organization_repositories(&octocrab, &cli.owner).await.unwrap();
+
+    let total_repos = &repos.len();
+
+    for repo in repos {
+	let tx = tx.clone();
+	let octocrab = octocrab.clone();
+	let owner = cli.owner.clone();
+	let user = cli.user.clone();
+
+	tokio::spawn(async move {
+            let activities = list_activity(&octocrab, &owner, &repo, &user, since, until).await.unwrap();
+	    let cmd = Command::Set {
+		key: repo,
+		val: activities
+	    };
+            tx.send(cmd).await.unwrap();
+	});
+    }
+
+    let mut results: HashMap<String, Vec<String>> = HashMap::new();
+
+    while let Some(cmd) = rx.recv().await {
+	match cmd {
+	    Command::Set {key, val} => {
+		results.insert(key, val);
+		if results.len() == total_repos.clone() {
+		    break;
+		}
+	    }
+	}
+    };
+
+    println!("{}", print_result(&results));
+
+    Ok(())
+
 }
 
-#[derive(Deserialize)]
-struct PullCommit {
-    sha: String,
-    pull: Pull
-}
 
-
-fn main() {
-    let owner = "restaumatic";
-    let user = "jborkowski";
-
-    let gh_token = std::env::var("GH_TOKEN").expect("GH_TOKEN must be set.");
-    let clientg = Github::new(gh_token).expect("Failed to create Github client");
-    let since = Timestamp::parse("2022-10-01T00:00:00Z").expect("Failed to parse 'since' date");
-    let until = Timestamp::parse("2022-10-31T23:59:59Z").expect("Failed to parse 'until' date");
-
-
-    let results: Vec<(String, HashMap<u32, Vec<PullCommit>>)> = organization_repositories(&clientg, owner)
-	.par_iter()
-	.map(|repo| {
-             var("GH_TOKEN")
-                .map_err(|e| "GH_TOKEN must be set.")
-		.and_then(|token| Github::new(token).map_err(|e| "Failed to create Github client"))
-		.and_then(|client| Ok(activity_for(&client, &owner, &repo.name, &user, &since, &until)))
-		.map(|activity|	(repo.name.clone(), activity))
-		.expect("Failed to parse 'until' date")
-	})
-	.collect::<Vec<_>>();
-
-    println!("{}", print_result(&results))
-}
-
-
-
-fn print_result(results: &Vec<(String, HashMap<u32, Vec<PullCommit>>)>) -> String {
+fn print_result(results: &HashMap<String, Vec<String>>) -> String {
     let mut out = String::new();
-    out.push_str("Contributions:\n");
-
     results
 	.into_iter()
-	.for_each(|(project, pulls)| {
+	.for_each(|(repo, pulls)| {
 	    if !pulls.is_empty() {
-		let repo = format!("\tKontrybucja do repozytorium kodu \"{}\":\n", project);
+		let repo = format!("Kontrybucja do repozytorium kodu \"{}\":\n", repo);
 		out.push_str(&repo);
 
-		pulls.iter().for_each(|(pull, commits)| {
-		    commits.first().iter().for_each(|f| {
-			let pull = format!("\t\t#{}: {} ({})\n", pull, f.pull.title, print_commits(&commits));
-			out.push_str(&pull);
-		    })
+		pulls.iter().for_each(|pull| {
+		    out.push_str(&pull);
 		});
+
+		out.push_str("\n");
 	    };
 	});
 
     out
 }
 
-fn print_commits(commits: &Vec<PullCommit>) -> String {
-    commits.into_iter().map(|cp| &cp.sha[0..7]).collect::<Vec<_>>().join(", ")
+
+async fn get_organization_repositories(octocrab: &octocrab::Octocrab, owner: &String) -> octocrab::Result<Vec<String>> {
+    let mut result = Vec::new();
+
+    let mut current_page = octocrab
+	.orgs(owner)
+	.list_repos()
+	.sort(params::repos::Sort::Pushed)
+        .direction(params::Direction::Descending)
+        .per_page(100)
+        .send()
+        .await?;
+
+    let mut repos = current_page.take_items();
+    for repo in repos.drain(..) {
+	result.push(repo.name)
+    };
+
+    while let Ok(Some(mut new_page)) = octocrab.get_page(&current_page.next).await {
+        repos.extend(new_page.take_items());
+
+        for repo in repos.drain(..) {
+	    result.push(repo.name)
+        }
+
+        current_page = new_page;
+    }
+
+    Ok(result)
 }
 
-fn organization_repositories(client: &Github, owner: &str) -> Vec<Repo> {
-    let mut result: Vec<Repo> = Vec::new();
+async fn list_user_commits(octocrab: &octocrab::Octocrab, owner: &str, repo: &str, author: &str, since: DateTime<Utc>, until: DateTime<Utc>) -> octocrab::Result<Vec<RepoCommit>> {
+    let mut result: Vec<RepoCommit> = Vec::new();
 
+    let mut current_page = octocrab
+	.repos(owner, repo)
+	.list_commits()
+	.author(author)
+	.since(since)
+	.until(until)
+	.send()
+	.await?;
 
-    fn fetch_page(client: &Github, owner: &str, page: i8) -> Option<Vec<Repo>> {
-	let repos_endpoint = format!(
-	    "orgs/{}/repos?type=all&page={}&per_page=100",
-            owner, page
+    let mut commits = current_page.take_items();
+
+    for commit in commits.drain(..) {
+	result.push(commit)
+    };
+
+    while let Ok(Some(mut new_page)) = octocrab.get_page(&current_page.next).await {
+        commits.extend(new_page.take_items());
+
+        for commit in commits.drain(..) {
+	    result.push(commit)
+        }
+
+        current_page = new_page;
+    }
+
+    Ok(result)
+
+}
+
+async fn get_associated_pull_requests(octocrab: &octocrab::Octocrab, owner: &str, repo: &str, commit: &RepoCommit) -> octocrab::Result<Vec<PullRequest>>{
+    let mut result: Vec<PullRequest> = Vec::new();
+    let mut current_page = octocrab
+	.repos(owner, repo)
+	.list_pulls(commit.sha.to_string())
+	.send()
+	.await?;
+
+    let mut prs = current_page.take_items();
+    for pr in prs.drain(..) {
+	result.push(pr)
+    };
+
+    Ok(result)
+
+}
+
+async fn get_pull_request_commits(octocrab: &octocrab::Octocrab, owner: &str, repo: &str, pull_number: &u64) -> octocrab::Result<Vec<RepoCommit>>{
+    let mut result: Vec<RepoCommit> = Vec::new();
+    let mut current_page = octocrab
+        .list_commits(owner, repo, pull_number)
+	.await?;
+
+    let mut commits = current_page.take_items();
+    for commit in commits.drain(..) {
+	result.push(commit)
+    };
+
+    Ok(result)
+}
+
+async fn list_activity(octocrab: &octocrab::Octocrab, owner: &str, repo: &str, user: &str, since: DateTime<Utc>, until: DateTime<Utc>) -> octocrab::Result<Vec<String>> {
+    let mut result: Vec<String> = Vec::new();
+
+    let pull_commits = list_user_commits(&octocrab, owner, repo, user, since, until).await.unwrap();
+
+    for commit in pull_commits {
+	let pulls = get_associated_pull_requests(&octocrab, owner, repo, &commit).await.unwrap();
+
+	if pulls.is_empty() {
+	    let commit_text: String = format!("{}: ({})\n", commit.commit.message, &commit.sha[0..7]);
+	    result.push(commit_text);
+	} else {
+	    for pull in pulls {
+		let commits = get_pull_request_commits(&octocrab, owner, repo, &pull.number).await.unwrap();
+		let formatted_commits: String = commits.iter().map(|cp| &cp.sha[0..7]).collect::<Vec<_>>().join(", ");
+
+		let title = pull.title.unwrap_or(commit.commit.message.clone());
+		let pull_text = format!("#{}: {} ({})\n", pull.number, title, &formatted_commits);
+		result.push(pull_text);
+	    }
+	}
+    }
+    result.dedup();
+
+    Ok(result)
+}
+
+#[async_trait::async_trait]
+trait PullsExt {
+  async fn list_commits(&self, owner: &str, repo: &str, pull_number: &u64) -> Result<Page<RepoCommit>>;
+}
+
+#[async_trait::async_trait]
+impl PullsExt for Octocrab {
+    async fn list_commits(&self, owner: &str, repo: &str, pull_number: &u64) -> Result<Page<RepoCommit>> {
+	let url = format!(
+	    "/repos/{owner}/{repo}/pulls/{pull_number}/commits",
+            owner = owner,
+            repo = repo,
+	    pull_number = pull_number
 	);
-
-	client
-	    .get()
-	    .custom_endpoint(&repos_endpoint)
-	    .execute::<Vec<Repo>>()
-	    .expect("Cannot fetch organisation repos")
-	    .2
-    }
-
-
-    for i in 1..=5 {
-	match fetch_page(&client, &owner, i) {
-	    Some(mut vec) => result.append(&mut vec),
-	    None => break,
-	}
-    }
-
-    println!("Organization have {} repositories.", result.len());
-
-    result
-
-}
-
-fn activity_for(client: &Github, owner: &str, repo_name: &str, user_login: &str, since: &Timestamp, until: &Timestamp) -> HashMap<u32, Vec<PullCommit>> {
-    let mut results: HashMap<u32, Vec<PullCommit>> = HashMap::new();
-
-    let commits_endpoint = format!(
-	"repos/{}/{}/commits?author={}&since={}&until={}&per_page=100",
-        owner, repo_name, user_login, since.format(), until.format()
-    );
-
-    client
-        .get()
-	.custom_endpoint(&commits_endpoint)
-        .execute::<Vec<CommitSHA>>()
-	.expect("Cannot fetch pulls")
-	.2.unwrap_or(Vec::new())
-	.iter()
-	.for_each(|commit_sha| {
- 	    let sha = commit_sha.sha.clone();
-	    let details_endpoint = format!(
-		"repos/{}/{}/commits/{}/pulls",
-		owner, repo_name, sha
-	    );
-
-	    let res = client
-		.get()
-		.custom_endpoint(&details_endpoint)
-		.execute::<Vec<Pull>>();
-
-	match res {
-	    Ok((_,_,Some(vec))) => {
-		vec.into_iter().for_each(|pull| {
-		    if results.contains_key(&pull.number) {
-			if let Some(old) = results.get_mut(&pull.number) {
-			    let sha = commit_sha.sha.clone();
-			    old.push(PullCommit { pull, sha })
-			}
-		    } else {
-			let sha = commit_sha.sha.clone();
-			results.insert(pull.number, vec![PullCommit { pull, sha }]);
-		    }
-		})
-	    },
-	    Ok(_) =>
-		(),
-	    Err(err) =>
-		println!("{:?}", err)
-
-	}
-
-
-    });
-
-    results
-
+        self.get(url, None::<&()>).await
+  }
 }
