@@ -12,15 +12,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-unknown-none
+          - target: x86_64-unknown-linux-gnu
             archive: tar.gz tar.xz
           - target: x86_64-apple-darwin
             archive: tar.gz
     steps:
       - uses: actions/checkout@master
-      - name: Install x86_64-unknown-none target
-        run: |
-          rustup target add x86_64-unknown-none
       - name: Compile and release
         uses: rust-build/rust-build.action@v1.3.2
         env:
