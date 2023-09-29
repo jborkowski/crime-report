@@ -70,32 +70,32 @@ async fn main() -> octocrab::Result<()> {
     let total_repos = &repos.len();
 
     for repo in repos {
-	let tx = tx.clone();
-	let octocrab = octocrab.clone();
-	let owner = cli.owner.clone();
-	let user = cli.user.clone();
+	      let tx = tx.clone();
+	      let octocrab = octocrab.clone();
+	      let owner = cli.owner.clone();
+	      let user = cli.user.clone();
 
-	tokio::spawn(async move {
+	      tokio::spawn(async move {
             let activities = list_activity(&octocrab, &owner, &repo, &user, since, until).await.unwrap();
-	    let cmd = Command::Set {
-		key: repo,
-		val: activities
-	    };
+	          let cmd = Command::Set {
+		            key: repo,
+		            val: activities
+	          };
             tx.send(cmd).await.unwrap();
-	});
+	      });
     }
 
     let mut results: HashMap<String, Vec<String>> = HashMap::new();
 
     while let Some(cmd) = rx.recv().await {
-	match cmd {
-	    Command::Set {key, val} => {
-		results.insert(key, val);
-		if results.len() == total_repos.clone() {
-		    break;
-		}
-	    }
-	}
+	      match cmd {
+	          Command::Set {key, val} => {
+		            results.insert(key, val);
+		            if results.len() == total_repos.clone() {
+		                break;
+		            }
+	          }
+	      }
     };
 
     println!("{}", print_result(&results));
@@ -130,9 +130,9 @@ async fn get_organization_repositories(octocrab: &octocrab::Octocrab, owner: &St
     let mut result = Vec::new();
 
     let mut current_page = octocrab
-	.orgs(owner)
-	.list_repos()
-	.sort(params::repos::Sort::Pushed)
+	      .orgs(owner)
+	      .list_repos()
+	      .sort(params::repos::Sort::Pushed)
         .direction(params::Direction::Descending)
         .per_page(100)
         .send()
@@ -140,14 +140,14 @@ async fn get_organization_repositories(octocrab: &octocrab::Octocrab, owner: &St
 
     let mut repos = current_page.take_items();
     for repo in repos.drain(..) {
-	result.push(repo.name)
+	      result.push(repo.name)
     };
 
     while let Ok(Some(mut new_page)) = octocrab.get_page(&current_page.next).await {
         repos.extend(new_page.take_items());
 
         for repo in repos.drain(..) {
-	    result.push(repo.name)
+	          result.push(repo.name)
         }
 
         current_page = new_page;
@@ -160,25 +160,25 @@ async fn list_user_commits(octocrab: &octocrab::Octocrab, owner: &str, repo: &st
     let mut result: Vec<RepoCommit> = Vec::new();
 
     let mut current_page = octocrab
-	.repos(owner, repo)
-	.list_commits()
-	.author(author)
-	.since(since)
-	.until(until)
-	.send()
-	.await?;
+	      .repos(owner, repo)
+	      .list_commits()
+	      .author(author)
+	      .since(since)
+	      .until(until)
+	      .send()
+	      .await?;
 
     let mut commits = current_page.take_items();
 
     for commit in commits.drain(..) {
-	result.push(commit)
+	      result.push(commit)
     };
 
     while let Ok(Some(mut new_page)) = octocrab.get_page(&current_page.next).await {
         commits.extend(new_page.take_items());
 
         for commit in commits.drain(..) {
-	    result.push(commit)
+	          result.push(commit)
         }
 
         current_page = new_page;
@@ -191,14 +191,14 @@ async fn list_user_commits(octocrab: &octocrab::Octocrab, owner: &str, repo: &st
 async fn get_associated_pull_requests(octocrab: &octocrab::Octocrab, owner: &str, repo: &str, commit: &RepoCommit) -> octocrab::Result<Vec<PullRequest>>{
     let mut result: Vec<PullRequest> = Vec::new();
     let mut current_page = octocrab
-	.repos(owner, repo)
-	.list_pulls(commit.sha.to_string())
-	.send()
-	.await?;
+	      .repos(owner, repo)
+	      .list_pulls(commit.sha.to_string())
+	      .send()
+	      .await?;
 
     let mut prs = current_page.take_items();
     for pr in prs.drain(..) {
-	result.push(pr)
+	      result.push(pr)
     };
 
     Ok(result)
@@ -209,37 +209,42 @@ async fn get_pull_request_commits(octocrab: &octocrab::Octocrab, owner: &str, re
     let mut result: Vec<RepoCommit> = Vec::new();
     let mut current_page = octocrab
         .list_commits(owner, repo, pull_number)
-	.await?;
+	      .await?;
 
     let mut commits = current_page.take_items();
     for commit in commits.drain(..) {
-	result.push(commit)
+	      result.push(commit)
     };
 
     Ok(result)
 }
 
+#[feature(option_result_contains)]
 async fn list_activity(octocrab: &octocrab::Octocrab, owner: &str, repo: &str, user: &str, since: DateTime<Utc>, until: DateTime<Utc>) -> octocrab::Result<Vec<String>> {
     let mut result: Vec<String> = Vec::new();
 
     let pull_commits = list_user_commits(&octocrab, owner, repo, user, since, until).await.unwrap();
 
     for commit in pull_commits {
-	let pulls = get_associated_pull_requests(&octocrab, owner, repo, &commit).await.unwrap();
+	      let pulls = get_associated_pull_requests(&octocrab, owner, repo, &commit).await.unwrap();
 
-	if pulls.is_empty() {
-	    let commit_text: String = format!("{}: ({})\n", commit.commit.message, &commit.sha[0..7]);
-	    result.push(commit_text);
-	} else {
-	    for pull in pulls {
-		let commits = get_pull_request_commits(&octocrab, owner, repo, &pull.number).await.unwrap();
-		let formatted_commits: String = commits.iter().map(|cp| &cp.sha[0..7]).collect::<Vec<_>>().join(", ");
-
-		let title = pull.title.unwrap_or(commit.commit.message.clone());
-		let pull_text = format!("#{}: {} ({})\n", pull.number, title, &formatted_commits);
-		result.push(pull_text);
-	    }
-	}
+	      if pulls.is_empty() {
+	          let commit_text: String = format!("{}: ({})\n", commit.commit.message, &commit.sha[0..7]);
+	          result.push(commit_text);
+	      } else {
+	          for pull in pulls {
+		            let commits = get_pull_request_commits(&octocrab, owner, repo, &pull.number).await.unwrap();
+		            let formatted_commits: String =
+                    commits
+                        .iter()
+                        .filter(|c| *c.author.clone().map(|u| u.login == user).get_or_insert(false))
+                        .map(|cp| &cp.sha[0..7]).collect::<Vec<_>>().join(", ");
+                
+		            let title = pull.title.unwrap_or(commit.commit.message.clone());
+		            let pull_text = format!("#{}: {} ({})\n", pull.number, title, &formatted_commits);
+		            result.push(pull_text);
+	          }
+	      }
     }
     result.dedup();
 
@@ -248,18 +253,18 @@ async fn list_activity(octocrab: &octocrab::Octocrab, owner: &str, repo: &str, u
 
 #[async_trait::async_trait]
 trait PullsExt {
-  async fn list_commits(&self, owner: &str, repo: &str, pull_number: &u64) -> Result<Page<RepoCommit>>;
+    async fn list_commits(&self, owner: &str, repo: &str, pull_number: &u64) -> Result<Page<RepoCommit>>;
 }
 
 #[async_trait::async_trait]
 impl PullsExt for Octocrab {
     async fn list_commits(&self, owner: &str, repo: &str, pull_number: &u64) -> Result<Page<RepoCommit>> {
-	let url = format!(
-	    "/repos/{owner}/{repo}/pulls/{pull_number}/commits",
+	      let url = format!(
+	          "/repos/{owner}/{repo}/pulls/{pull_number}/commits",
             owner = owner,
             repo = repo,
-	    pull_number = pull_number
-	);
+	          pull_number = pull_number
+	      );
         self.get(url, None::<&()>).await
-  }
+    }
 }
