@@ -1,5 +1,4 @@
 use chrono::naive::NaiveDate;
-use chrono::TimeZone;
 use chrono::{DateTime, Datelike, Local, Utc};
 use clap::{arg, command, Parser};
 use octocrab::models::pulls::PullRequest;
@@ -21,13 +20,13 @@ static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 #[command(next_line_help = true)]
 struct Cli {
     #[arg(long)]
-    #[arg(short = 's')]
-    #[arg(default_value_t = default_since())]
-    since: NaiveDate,
+    #[arg(short = 'y')]
+    #[arg(default_value_t = Local::now().date_naive().year())]
+    year: i32,
     #[arg(long)]
-    #[arg(short = 'u')]
-    #[arg(default_value_t = default_until())]
-    until: NaiveDate,
+    #[arg(short = 'm')]
+    #[arg(default_value_t = Local::now().date_naive().month())]
+    month: u32,
 
     #[arg(long, default_value_t = String::from("restaumatic"))]
     owner: String,
@@ -39,16 +38,6 @@ struct Cli {
     gh_token: Option<String>,
 }
 
-fn default_since() -> NaiveDate {
-    let local: DateTime<Local> = Local::now();
-    NaiveDate::from_ymd_opt(local.year(), local.month(), 1).unwrap()
-}
-
-fn default_until() -> NaiveDate {
-    let local: DateTime<Local> = Local::now();
-    NaiveDate::from_ymd_opt(local.year(), local.month(), local.day()).unwrap()
-}
-
 #[derive(Debug)]
 enum Command {
     Set { key: String, val: Vec<String> },
@@ -57,7 +46,6 @@ enum Command {
 #[tokio::main]
 async fn main() -> octocrab::Result<()> {
     let cli = Cli::parse();
-
 
     let gh_token = match cli.gh_token {
         None => {
@@ -68,17 +56,22 @@ async fn main() -> octocrab::Result<()> {
                     std::process::exit(1);
                 }
             }
-        },
+        }
         Some(gh_token) => gh_token,
     };
 
+    let since = NaiveDate::from_ymd_opt(cli.year, cli.month, 1).unwrap();
+
+    let until = NaiveDate::from_ymd_opt(cli.year, cli.month + 1, 1).unwrap();
+
+
     println!(
         "Fetching activities for user: '{}' in '{}' organization ({} - {})\n",
-        cli.user, cli.owner, cli.since, cli.until
+        cli.user, cli.owner, since, until
     );
 
-    let since = Utc.from_utc_datetime(&cli.since.and_hms_opt(0, 0, 0).unwrap());
-    let until = Utc.from_utc_datetime(&cli.until.and_hms_opt(0, 0, 0).unwrap());
+    // let since = Utc.from_utc_datetime(&cli.since.and_hms_opt(0, 0, 0).unwrap());
+    // let until = Utc.from_utc_datetime(&cli.until.and_hms_opt(0, 0, 0).unwrap());
 
     let octocrab = octocrab::Octocrab::builder()
         .personal_token(gh_token)
@@ -184,8 +177,8 @@ async fn list_user_commits(
     owner: &str,
     repo: &str,
     author: &str,
-    since: DateTime<Utc>,
-    until: DateTime<Utc>,
+    since: NaiveDate,
+    until: NaiveDate,
 ) -> octocrab::Result<Vec<RepoCommit>> {
     let mut result: Vec<RepoCommit> = Vec::new();
 
@@ -193,8 +186,8 @@ async fn list_user_commits(
         .repos(owner, repo)
         .list_commits()
         .author(author)
-        .since(since)
-        .until(until)
+        .since(DateTime::from_naive_utc_and_offset(since.into(), Utc))
+        .until(DateTime::from_naive_utc_and_offset(until.into(), Utc))
         .send()
         .await?;
 
@@ -260,8 +253,8 @@ async fn list_activity(
     owner: &str,
     repo: &str,
     user: &str,
-    since: DateTime<Utc>,
-    until: DateTime<Utc>,
+    since: NaiveDate,
+    until: NaiveDate,
 ) -> octocrab::Result<Vec<String>> {
     let mut result: Vec<String> = Vec::new();
 
