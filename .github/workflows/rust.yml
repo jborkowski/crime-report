@@ -1,18 +1,58 @@
-name: Rust
+
+name: Rust Build
 
 on:
   push:
-    branches: [ "main" ]
-
-env:
-  CARGO_TERM_COLOR: always
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
 
 jobs:
   build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
 
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
 
     steps:
-    - uses: actions/checkout@v3
-    - name: Build
-      run: cargo build --verbose
+      - name: Checkout Repository
+        uses: actions/checkout@v2
+
+      - name: Install Dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+
+      - name: Build for Linux with Musl
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          rustup target add x86_64-unknown-linux-musl
+          cargo build --target x86_64-unknown-linux-musl --release
+
+      - name: Build for macOS
+        if: matrix.os == 'macos-latest'
+        run: cargo build --release
+
+      - name: Archive Artifacts
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v2
+        with:
+          name: linux-artifact
+          path: target/x86_64-unknown-linux-musl/release/crime-report
+
+      - name: Archive Artifacts
+        if: matrix.os == 'macos-latest'
+        uses: actions/upload-artifact@v2
+        with:
+          name: macos-artifact
+          path: target/release/crime-report
+
