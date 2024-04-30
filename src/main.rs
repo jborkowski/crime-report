@@ -35,8 +35,8 @@ struct Cli {
     #[arg(long, short = 'U')]
     user: String,
 
-    #[arg(long, default_value_t = std::env::var("GH_TOKEN").expect("GH_TOKEN must be set"))]
-    gh_token: String,
+    #[arg(long)]
+    gh_token: Option<String>,
 }
 
 fn default_since() -> NaiveDate {
@@ -58,6 +58,20 @@ enum Command {
 async fn main() -> octocrab::Result<()> {
     let cli = Cli::parse();
 
+
+    let gh_token = match cli.gh_token {
+        None => {
+            match std::env::var("GH_TOKEN") {
+                Ok(gh_token) => gh_token,
+                Err(_) => {
+                    eprintln!("GH_TOKEN is not provided as a command-line argument or environment variable");
+                    std::process::exit(1);
+                }
+            }
+        },
+        Some(gh_token) => gh_token,
+    };
+
     println!(
         "Fetching activities for user: '{}' in '{}' organization ({} - {})\n",
         cli.user, cli.owner, cli.since, cli.until
@@ -67,7 +81,7 @@ async fn main() -> octocrab::Result<()> {
     let until = Utc.from_utc_datetime(&cli.until.and_hms_opt(0, 0, 0).unwrap());
 
     let octocrab = octocrab::Octocrab::builder()
-        .personal_token(cli.gh_token)
+        .personal_token(gh_token)
         .build()?;
 
     let (tx, mut rx) = mpsc::channel(100);
