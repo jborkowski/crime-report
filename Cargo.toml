@@ -14,5 +14,7 @@ chrono = "0.4.23"
 tokio = { version = "1.4.0", features = ["full"] }
 tokio-stream = "0.1.11"
 async-trait = "0.1.80"
+
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
 jemallocator = "0.5.4"
 
