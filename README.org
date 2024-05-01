@@ -3,13 +3,13 @@ The =crime-report= is simple tool to automate paperwork related to copyright tra
 The tool produces a list of contributions to organization repositories for a specific GitHub user within a specified period.
 
 ** Usage
-Download prebuilt binary (or build on your machine) and then copy it to =~/.local/bin/= (Make sure you have this in your PATH).
+Download the prebuilt binary (or build on your machine) and copy it to =~/.local/bin/= (Make sure you have this in your PATH).
 
 *NOTE* Accessing private repositories requires passing your GH_TOKEN. The tool can get it from an environment variable or param =--gh-token=
 
-Then you can execute tool by passing necessary params:
+Then you can execute tool by passing the necessary params:
 #+begin_src bash
-  λ crime-report --since 2020-12-01 --until 2020-12-31 -U jborkowski --gh-token your-gh-token
+  λ crime-report -U jborkowski --gh-token your-gh-token
 #+end_src
 
 More information about available options you can get by running program with =--help= flag
@@ -18,19 +18,19 @@ More information about available options you can get by running program with =--
 
   Usage: crime-report [OPTIONS] --user <USER>
 
-  Options:
-    -s, --since <SINCE>
-            [default: 2023-01-01]
-    -u, --until <UNTIL>
-            [default: 2023-01-02]
-        --owner <OWNER>
-            [default: restaumatic]
-    -U, --user <USER>
-
-        --gh-token <GH_TOKEN>
-            [default: env GH_TOKEN]
-    -h, --help
-            Print help information
-    -V, --version
-          Print version information
+Options:
+  -y, --year <YEAR>
+          [default: 2024]
+  -m, --month <MONTH>
+          [default: 5]
+      --owner <OWNER>
+          [default: restaumatic]
+  -U, --user <USER>
+          
+      --gh-token <GH_TOKEN>
+          
+  -h, --help
+          Print help
+  -V, --version
+          Print version
 #+end_src
