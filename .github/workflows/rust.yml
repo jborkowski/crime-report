@@ -20,7 +20,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Install Dependencies
         if: matrix.os == 'ubuntu-latest'
@@ -44,14 +44,14 @@ jobs:
 
       - name: Archive Artifacts
         if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: linux-artifact
           path: target/x86_64-unknown-linux-musl/release/crime-report
 
       - name: Archive Artifacts
         if: matrix.os == 'macos-latest'
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
           name: macos-artifact
           path: target/release/crime-report
