@@ -8,6 +8,7 @@ jobs:
   release:
     name: Release ${{ matrix.target }}
     runs-on: ubuntu-latest
+    if: github.event_name == 'release'
     strategy:
       fail-fast: false
       matrix:
@@ -27,7 +28,8 @@ jobs:
         with:
           RUSTTARGET: ${{ matrix.target }}
           ARCHIVE_TYPES: ${{ matrix.archive }}
-          ADDITIONAL_ARGS: --release
+          EXTRA_COMMAND_FLAGS: --release
+          TOOLCHAIN_VERSION: stable
 
   macos-arm-release:
     name: Release Mac OS ARM
