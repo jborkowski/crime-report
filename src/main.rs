@@ -64,14 +64,10 @@ async fn main() -> octocrab::Result<()> {
 
     let until = NaiveDate::from_ymd_opt(cli.year, cli.month + 1, 1).unwrap();
 
-
     println!(
         "Fetching activities for user: '{}' in '{}' organization ({} - {})\n",
         cli.user, cli.owner, since, until
     );
-
-    // let since = Utc.from_utc_datetime(&cli.since.and_hms_opt(0, 0, 0).unwrap());
-    // let until = Utc.from_utc_datetime(&cli.until.and_hms_opt(0, 0, 0).unwrap());
 
     let octocrab = octocrab::Octocrab::builder()
         .personal_token(gh_token)
@@ -79,9 +75,7 @@ async fn main() -> octocrab::Result<()> {
 
     let (tx, mut rx) = mpsc::channel(100);
 
-    let repos: Vec<String> = get_organization_repositories(&octocrab, &cli.owner)
-        .await
-        .unwrap();
+    let repos: Vec<String> = get_organization_repositories(&octocrab, &cli.owner).await?;
 
     let total_repos = &repos.len();
 
@@ -95,6 +89,7 @@ async fn main() -> octocrab::Result<()> {
             let activities = list_activity(&octocrab, &owner, &repo, &user, since, until)
                 .await
                 .unwrap();
+
             let cmd = Command::Set {
                 key: repo,
                 val: activities,
@@ -145,35 +140,27 @@ async fn get_organization_repositories(
 ) -> octocrab::Result<Vec<String>> {
     let mut result = Vec::new();
 
-    let mut current_page = octocrab
+    let stream = octocrab
         .orgs(owner)
         .list_repos()
         .sort(params::repos::Sort::Pushed)
         .direction(params::Direction::Descending)
-        .per_page(100)
         .send()
-        .await?;
+        .await?
+        .into_stream(octocrab);
 
-    let mut repos = current_page.take_items();
-    for repo in repos.drain(..) {
-        result.push(repo.name)
-    }
+    tokio::pin!(stream);
+    use futures_util::TryStreamExt;
 
-    while let Ok(Some(mut new_page)) = octocrab.get_page(&current_page.next).await {
-        repos.extend(new_page.take_items());
-
-        for repo in repos.drain(..) {
-            result.push(repo.name)
-        }
-
-        current_page = new_page;
+    while let Some(repo) = stream.try_next().await? {
+        result.push(repo.name);
     }
 
     Ok(result)
 }
 
 async fn list_user_commits(
-    octocrab: &octocrab::Octocrab,
+    crab: &octocrab::Octocrab,
     owner: &str,
     repo: &str,
     author: &str,
@@ -182,29 +169,21 @@ async fn list_user_commits(
 ) -> octocrab::Result<Vec<RepoCommit>> {
     let mut result: Vec<RepoCommit> = Vec::new();
 
-    let mut current_page = octocrab
+    let stream = crab
         .repos(owner, repo)
         .list_commits()
         .author(author)
         .since(DateTime::from_naive_utc_and_offset(since.into(), Utc))
         .until(DateTime::from_naive_utc_and_offset(until.into(), Utc))
         .send()
-        .await?;
+        .await?
+        .into_stream(crab);
 
-    let mut commits = current_page.take_items();
+    tokio::pin!(stream);
+    use futures_util::TryStreamExt;
 
-    for commit in commits.drain(..) {
-        result.push(commit)
-    }
-
-    while let Ok(Some(mut new_page)) = octocrab.get_page(&current_page.next).await {
-        commits.extend(new_page.take_items());
-
-        for commit in commits.drain(..) {
-            result.push(commit)
-        }
-
-        current_page = new_page;
+    while let Some(commit) = stream.try_next().await? {
+        result.push(commit);
     }
 
     Ok(result)
@@ -217,15 +196,19 @@ async fn get_associated_pull_requests(
     commit: &RepoCommit,
 ) -> octocrab::Result<Vec<PullRequest>> {
     let mut result: Vec<PullRequest> = Vec::new();
-    let mut current_page = octocrab
+
+    let stream = octocrab
         .repos(owner, repo)
         .list_pulls(commit.sha.to_string())
         .send()
-        .await?;
+        .await?
+        .into_stream(octocrab);
 
-    let mut prs = current_page.take_items();
-    for pr in prs.drain(..) {
-        result.push(pr)
+    tokio::pin!(stream);
+    use futures_util::TryStreamExt;
+
+    while let Some(pr) = stream.try_next().await? {
+        result.push(pr);
     }
 
     Ok(result)
@@ -258,14 +241,16 @@ async fn list_activity(
 ) -> octocrab::Result<Vec<String>> {
     let mut result: Vec<String> = Vec::new();
 
-    let pull_commits = list_user_commits(octocrab, owner, repo, user, since, until)
-        .await
-        .unwrap();
+    let pull_commits = match list_user_commits(octocrab, owner, repo, user, since, until).await {
+        Ok(commits) => commits,
+        Err(e) => {
+            eprintln!("Error fetching commits for {}/{}: {}", owner, repo, e);
+            Vec::new()
+        }
+    };
 
     for commit in pull_commits {
-        let pulls = get_associated_pull_requests(octocrab, owner, repo, &commit)
-            .await
-            .unwrap();
+        let pulls = get_associated_pull_requests(octocrab, owner, repo, &commit).await?;
 
         if pulls.is_empty() {
             let commit_text: String =
