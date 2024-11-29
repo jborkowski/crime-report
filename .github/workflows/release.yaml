@@ -27,7 +27,6 @@ jobs:
         with:
           RUSTTARGET: ${{ matrix.target }}
           ARCHIVE_TYPES: ${{ matrix.archive }}
-          TOOLCHAIN_VERSION: 1.77.2
           ADDITIONAL_ARGS: --release
 
   macos-arm-release:
