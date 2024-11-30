@@ -16,6 +16,9 @@ tokio = { version = "1.4.0", features = ["full"] }
 tokio-stream = "0.1.11"
 async-trait = "0.1.80"
 futures-util = "0.3.31"
+futures = "0.3.31"
+derive-new = "0.7.0"
+snafu = { version = "0.8.5", features = ["backtrace"] }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 jemallocator = "0.5.4"
