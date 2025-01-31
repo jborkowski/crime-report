@@ -50,6 +50,8 @@ impl Cli {
         if month == 12 {
             year += 1;
             month = 1;
+        } else {
+            month += 1;
         }
 
         NaiveDate::from_ymd_opt(year, month, 1).unwrap_or_default()
