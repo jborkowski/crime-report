@@ -20,7 +20,9 @@ futures = "0.3.31"
 derive-new = "0.7.0"
 snafu = { version = "0.8.5", features = ["backtrace"] }
 google-docs1 = "6.0.0+20240613"
+google-drive3 = "6.0.0+20240613"
 google-authenticator = "0.4.2"
+anyhow = "1.0.98"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 jemallocator = "0.5.4"

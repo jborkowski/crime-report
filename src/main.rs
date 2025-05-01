@@ -1,13 +1,10 @@
+use anyhow::anyhow;
 use chrono::naive::NaiveDate;
-use chrono::{DateTime, Datelike, Local, Utc};
+use chrono::{Datelike, Local};
 use clap::{arg, command, Parser};
-use derive_new::new;
 use futures::future;
-use octocrab::models::pulls::PullRequest;
-use octocrab::models::repos::RepoCommit;
-use octocrab::{params, Octocrab, Page, Result};
-use std::fmt::Display;
 
+mod activities;
 mod docs;
 
 /*
@@ -74,7 +71,7 @@ impl Cli {
 }
 
 #[tokio::main]
-async fn main() -> octocrab::Result<()> {
+async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     println!(
@@ -84,12 +81,13 @@ async fn main() -> octocrab::Result<()> {
         cli.since(),
         cli.until()
     );
-
     let octocrab = octocrab::Octocrab::builder()
         .personal_token(cli.gh_token())
-        .build()?;
+        .build()
+        .map_err(|err| anyhow!("Failed to build Octocrab client: {}", err))?;
 
-    let repos: Vec<String> = get_organization_repositories(&octocrab, &cli.owner).await?;
+    let repos: Vec<String> =
+        activities::get_organization_repositories(&octocrab, &cli.owner).await?;
 
     use snafu::Backtrace;
 
@@ -100,7 +98,7 @@ async fn main() -> octocrab::Result<()> {
         let user = cli.user.clone();
         let owner = cli.owner.clone();
         tokio::task::spawn(async move {
-            list_activity(&octocrab, &owner, &repo, user, since, until).await
+            activities::list_activity(&octocrab, &owner, &repo, user, since, until).await
         })
     }))
     .await
@@ -113,7 +111,10 @@ async fn main() -> octocrab::Result<()> {
             })
             .and_then(|activity_result| activity_result)
     })
-    .collect::<octocrab::Result<Vec<_>>>()?;
+    .collect::<octocrab::Result<Vec<_>>>()
+    .map_err(|err| anyhow!("Failed to collect repository activities: {}", err))?;
+
+    create_from_template(&activities).await?;
 
     for activity in activities
         .iter()
@@ -125,243 +126,23 @@ async fn main() -> octocrab::Result<()> {
     Ok(())
 }
 
-async fn get_organization_repositories(
-    octocrab: &octocrab::Octocrab,
-    owner: &String,
-) -> octocrab::Result<Vec<String>> {
-    let mut result = Vec::new();
+async fn create_from_template(activities: &Vec<activities::Activity>) -> anyhow::Result<()> {
+    let credentials_path = "credentials.json";
 
-    let stream = octocrab
-        .orgs(owner)
-        .list_repos()
-        .sort(params::repos::Sort::Pushed)
-        .direction(params::Direction::Descending)
-        .per_page(100)
-        .send()
-        .await?
-        .into_stream(octocrab);
+    let (docs, drive) = docs::create_clients(credentials_path)
+        .await
+        .map_err(|err| anyhow!("Error creating document clients: {}", err))?;
 
-    tokio::pin!(stream);
-    use futures_util::TryStreamExt;
+    let template_id = "1L8irFWvF9ZV0R1itVfZ0fzMiyMvzJCcnblK-HDCn31U";
+    let new_title = "[TEST] Raport do faktury nr 4/2025";
 
-    while let Some(repo) = stream.try_next().await? {
-        result.push(repo.name);
-    }
+    let new_doc_id = docs::copy_template(&drive, template_id, new_title)
+        .await
+        .map_err(|err| anyhow!("Failed to copy template document: {}", err))?;
 
-    Ok(result)
-}
+    docs::fill_placeholders(&docs, &new_doc_id, activities)
+        .await
+        .map_err(|err| anyhow!("Failed to fill placeholders in document: {}", err))?;
 
-async fn list_user_commits(
-    crab: &octocrab::Octocrab,
-    owner: &String,
-    repo: &String,
-    author: &String,
-    since: NaiveDate,
-    until: NaiveDate,
-) -> octocrab::Result<Vec<RepoCommit>> {
-    let mut result: Vec<RepoCommit> = Vec::new();
-
-    let stream = crab
-        .repos(owner, repo)
-        .list_commits()
-        .author(author)
-        .since(DateTime::from_naive_utc_and_offset(since.into(), Utc))
-        .until(DateTime::from_naive_utc_and_offset(until.into(), Utc))
-        .per_page(100)
-        .send()
-        .await?
-        .into_stream(crab);
-
-    tokio::pin!(stream);
-    use futures_util::TryStreamExt;
-
-    while let Some(commit) = stream.try_next().await? {
-        result.push(commit);
-    }
-
-    Ok(result)
-}
-
-async fn get_associated_pull_requests(
-    octocrab: &octocrab::Octocrab,
-    owner: &String,
-    repo: &String,
-    commit: &RepoCommit,
-) -> octocrab::Result<Vec<PullRequest>> {
-    let mut result: Vec<PullRequest> = Vec::new();
-
-    let stream = octocrab
-        .repos(owner, repo)
-        .list_pulls(commit.sha.to_string())
-        .per_page(100)
-        .send()
-        .await?
-        .into_stream(octocrab);
-
-    tokio::pin!(stream);
-    use futures_util::TryStreamExt;
-
-    while let Some(pr) = stream.try_next().await? {
-        result.push(pr);
-    }
-
-    Ok(result)
-}
-
-async fn get_pull_request_commits(
-    octocrab: &octocrab::Octocrab,
-    owner: String,
-    repo: String,
-    pull_number: &u64,
-) -> octocrab::Result<Vec<RepoCommit>> {
-    let mut result: Vec<RepoCommit> = Vec::new();
-    let mut current_page = octocrab.list_commits(&owner, &repo, pull_number).await?;
-
-    let mut commits = current_page.take_items();
-    for commit in commits.drain(..) {
-        result.push(commit)
-    }
-
-    Ok(result)
-}
-
-struct Activity {
-    repository: String,
-    activities: Vec<ActivityDetail>,
-}
-
-#[derive(PartialEq, new)]
-struct PullRequestWithCommits {
-    pull: PullRequest,
-    commits: Vec<RepoCommit>,
-    user: String,
-}
-
-#[derive(PartialEq)]
-enum ActivityDetail {
-    SingleCommit(Box<RepoCommit>),
-    PullRequest(Box<PullRequestWithCommits>),
-}
-
-impl Display for Activity {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(
-            f,
-            "Kontrybucja do repozytorium kodu \"{}\":",
-            self.repository
-        )?;
-
-        for pull in &self.activities {
-            write!(f, "{}", pull)?;
-        }
-
-        write!(f, "\n")
-    }
-}
-
-impl Display for ActivityDetail {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ActivityDetail::SingleCommit(commit) => {
-                writeln!(f, "{}: ({})", commit.commit.message, &commit.sha[0..7])
-            }
-            ActivityDetail::PullRequest(pr_with_commits) => {
-                let formatted_commits: String = pr_with_commits
-                    .commits
-                    .iter()
-                    .filter(|c| {
-                        *c.author
-                            .clone()
-                            .map(|u| u.login == pr_with_commits.user)
-                            .get_or_insert(false)
-                    })
-                    .map(|cp| &cp.sha[0..7])
-                    .collect::<Vec<_>>()
-                    .join(", ");
-
-                let pull = pr_with_commits.pull.clone();
-
-                let title = pull.title.unwrap_or(
-                    pr_with_commits
-                        .commits
-                        .first()
-                        .unwrap()
-                        .commit
-                        .message
-                        .clone(),
-                );
-                writeln!(f, "#{}: {} ({})", pull.number, title, &formatted_commits)
-            }
-        }
-    }
-}
-
-async fn list_activity(
-    octocrab: &octocrab::Octocrab,
-    owner: &String,
-    repo: &String,
-    user: String,
-    since: NaiveDate,
-    until: NaiveDate,
-) -> octocrab::Result<Activity> {
-    let mut result: Vec<ActivityDetail> = Vec::new();
-    let repository = repo.to_string();
-
-    let pull_commits = match list_user_commits(octocrab, &owner, repo, &user, since, until).await {
-        Ok(commits) => commits,
-        Err(e) => {
-            eprintln!("Error fetching commits for {}/{}: {}", owner, &repo, e);
-            Vec::new()
-        }
-    };
-
-    for commit in pull_commits {
-        let pulls = get_associated_pull_requests(octocrab, owner, repo, &commit).await?;
-
-        if pulls.is_empty() {
-            result.push(ActivityDetail::SingleCommit(Box::new(commit)));
-        } else {
-            for pull in pulls {
-                let commits = get_pull_request_commits(
-                    octocrab,
-                    owner.to_string(),
-                    repo.to_string(),
-                    &pull.number,
-                )
-                .await?;
-                result.push(ActivityDetail::PullRequest(Box::new(
-                    PullRequestWithCommits::new(pull, commits, user.to_string()),
-                )));
-            }
-        }
-    }
-    result.dedup();
-
-    Ok(Activity {
-        repository,
-        activities: result,
-    })
-}
-
-#[async_trait::async_trait]
-trait PullsExt {
-    async fn list_commits(
-        &self,
-        owner: &str,
-        repo: &str,
-        pull_number: &u64,
-    ) -> Result<Page<RepoCommit>>;
-}
-
-#[async_trait::async_trait]
-impl PullsExt for Octocrab {
-    async fn list_commits(
-        &self,
-        owner: &str,
-        repo: &str,
-        pull_number: &u64,
-    ) -> Result<Page<RepoCommit>> {
-        let url = format!("/repos/{owner}/{repo}/pulls/{pull_number}/commits");
-        self.get(url, None::<&()>).await
-    }
+    Ok(())
 }

@@ -283,6 +283,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 name = "crime-report"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "chrono",
  "clap",
@@ -291,6 +292,7 @@ dependencies = [
  "futures-util",
  "google-authenticator",
  "google-docs1",
+ "google-drive3",
  "iso8601-timestamp",
  "jemallocator",
  "octocrab",
@@ -546,6 +548,26 @@ name = "google-docs1"
 version = "6.0.0+20240613"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8441d3fa1544efacb0fabf88c45ba60d424d718bb13f2a0ce2a6447efb99d14e"
+dependencies = [
+ "chrono",
+ "google-apis-common",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
+ "mime",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "tokio",
+ "url",
+ "yup-oauth2",
+]
+
+[[package]]
+name = "google-drive3"
+version = "6.0.0+20240618"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "84e3944ee656d220932785cf1d8275519c0989830b9b239453983ac44f328d9f"
 dependencies = [
  "chrono",
  "google-apis-common",
