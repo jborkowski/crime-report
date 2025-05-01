@@ -8,6 +8,8 @@ use octocrab::models::repos::RepoCommit;
 use octocrab::{params, Octocrab, Page, Result};
 use std::fmt::Display;
 
+mod docs;
+
 /*
 jemalloc used to be the default Rust allocator til circa November 2018. Here we explicitly opt back into it to avoid the abysmal musl allocator
 */
