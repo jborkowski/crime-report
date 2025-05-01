@@ -1,6 +1,6 @@
 // #![allow(dead_code)]
 use google_docs1::{
-    api::{CreateParagraphBulletsRequest, Document, InsertTextRequest, ParagraphElement, Request},
+    api::{CreateParagraphBulletsRequest, Document, InsertTextRequest, Request},
     common::Client,
     hyper_rustls, hyper_util,
     yup_oauth2::{self, InstalledFlowAuthenticator, InstalledFlowReturnMethod},
@@ -10,7 +10,7 @@ use google_drive3::{api::File as DriveFile, DriveHub};
 use snafu::Snafu;
 use std::path::Path;
 
-use crate::activities::{self, Activity};
+use crate::activities;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -131,6 +131,7 @@ pub async fn fill_placeholders(
 
     let content = doc.body.unwrap().content.unwrap();
 
+    // extract it to separate functions
     let template_paragraph = content
         .iter()
         .find(|element| {
@@ -157,7 +158,21 @@ pub async fn fill_placeholders(
     let end_index = template_paragraph.end_index.unwrap();
 
     let mut requests = Vec::new();
-    let mut cursor = end_index;
+
+    // Delete the template paragraph
+    requests.push(Request {
+        delete_content_range: Some(google_docs1::api::DeleteContentRangeRequest {
+            range: Some(google_docs1::api::Range {
+                segment_id: None,
+                start_index: Some(start_index),
+                end_index: Some(end_index),
+            }),
+        }),
+        ..Default::default()
+    });
+
+    // Adjust cursor after deletion
+    let mut cursor = start_index;
 
     for (i, activity) in activities.iter().enumerate() {
         let text = template_paragraph
@@ -196,25 +211,50 @@ pub async fn fill_placeholders(
         let repo_line_end = cursor + text.len() as i32;
         cursor = repo_line_end;
 
-        requests.push(Request {
-            create_paragraph_bullets: Some(CreateParagraphBulletsRequest {
-                range: Some(google_docs1::api::Range {
-                    start_index: Some(repo_line_end - text.len() as i32),
-                    end_index: Some(repo_line_end),
-                    segment_id: None,
-                }),
-                bullet_preset: Some("BULLET_ALPHA_LOWER".to_string()),
-            }),
-            ..Default::default()
-        });
+        if !text.is_empty() {
+            let end_index = repo_line_end;
+            let start_index = repo_line_end - text.len() as i32;
+
+            // Only apply bullets if we have a valid range
+            if start_index < end_index {
+                requests.push(Request {
+                    create_paragraph_bullets: Some(CreateParagraphBulletsRequest {
+                        range: Some(google_docs1::api::Range {
+                            start_index: Some(start_index),
+                            end_index: Some(end_index),
+                            segment_id: None,
+                        }),
+                        bullet_preset: Some("NUMBERED_DECIMAL_ALPHA_ROMAN".to_string()),
+                    }),
+                    ..Default::default()
+                });
+            }
+        }
 
         for entry in &activity.activities {
             let commit_text = entry.to_string();
+
+            if cursor > 0 && !commit_text.starts_with('\n') {
+                let newline = "\n";
+                requests.push(Request {
+                    insert_text: Some(InsertTextRequest {
+                        text: Some(newline.to_string()),
+                        location: Some(google_docs1::api::Location {
+                            index: Some(cursor),
+                            segment_id: None,
+                        }),
+                        end_of_segment_location: None,
+                    }),
+                    ..Default::default()
+                });
+                cursor += 1;
+            }
+
             requests.push(Request {
                 insert_text: Some(InsertTextRequest {
-                    text: commit_text.clone().into(),
+                    text: Some(commit_text.clone()),
                     location: Some(google_docs1::api::Location {
-                        index: cursor.into(),
+                        index: Some(cursor),
                         segment_id: None,
                     }),
                     end_of_segment_location: None,
@@ -232,29 +272,22 @@ pub async fn fill_placeholders(
                         start_index: Some(commit_line_end - commit_text.len() as i32),
                         end_index: Some(commit_line_end),
                     }),
-                    bullet_preset: Some("BULLET_ROMAN_LOWER".to_string()),
+                    bullet_preset: Some("NUMBERED_DECIMAL_ALPHA_ROMAN".to_string()),
                 }),
                 ..Default::default()
             });
         }
     }
 
-    requests.push(Request {
-        delete_content_range: Some(google_docs1::api::DeleteContentRangeRequest {
-            range: Some(google_docs1::api::Range {
-                segment_id: None,
-                start_index: Some(start_index),
-                end_index: Some(end_index),
-            }),
-        }),
-        ..Default::default()
-    });
-
     docs_client
         .documents()
         .batch_update(
             google_docs1::api::BatchUpdateDocumentRequest {
-                requests: Some(requests),
+                // FIXME: there is a problem with right split,
+                // https://docs.google.com/document/d/1kBtF8xmB-qn4UtcoRQyRLgO0c70P2QLp-hldRmP_b5o/edit?tab=t.0
+                // generated doc
+                // λ cargo run -- --month 4 --user jborkowski --gh-token xxx
+                requests: Some(requests.split_at(129).0.to_vec()),
                 ..Default::default()
             },
             document_id,
@@ -312,4 +345,3 @@ mod tests {
         println!("Successfully created document with ID: {}", document_id);
     }
 }
-
