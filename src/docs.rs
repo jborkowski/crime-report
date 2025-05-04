@@ -1,10 +1,13 @@
 // #![allow(dead_code)]
 use google_docs1::{
-    api::{CreateParagraphBulletsRequest, Document, InsertTextRequest, Request},
+    api::{
+        CreateParagraphBulletsRequest, Dimension, Document, InsertTextRequest, ParagraphStyle,
+        Range, Request, UpdateParagraphStyleRequest,
+    },
     common::Client,
     hyper_rustls, hyper_util,
     yup_oauth2::{self, InstalledFlowAuthenticator, InstalledFlowReturnMethod},
-    Docs,
+    Docs, FieldMask,
 };
 use google_drive3::{api::File as DriveFile, DriveHub};
 use snafu::Snafu;
@@ -125,7 +128,7 @@ pub async fn copy_template(
 pub async fn fill_placeholders(
     docs_client: &Docs<Connector>,
     document_id: &str,
-    activities: &Vec<activities::Activity>,
+    activities: &[activities::Activity],
 ) -> Result<()> {
     let doc = read_template(docs_client, document_id).await?;
 
@@ -135,13 +138,13 @@ pub async fn fill_placeholders(
     let template_paragraph = content
         .iter()
         .find(|element| {
-            element.paragraph.as_ref().map_or(false, |paragraph| {
+            element.paragraph.as_ref().is_some_and(|paragraph| {
                 paragraph.elements.iter().any(|el| {
                     el.iter().any(|paragraph_element| {
-                        paragraph_element.text_run.as_ref().map_or(false, |t| {
+                        paragraph_element.text_run.as_ref().is_some_and(|t| {
                             t.content
                                 .as_ref()
-                                .map_or(false, |content| content.contains("{repository_name}"))
+                                .is_some_and(|content| content.contains("{repository_name}"))
                         })
                     })
                 })
@@ -152,29 +155,22 @@ pub async fn fill_placeholders(
             reason: "Template paragraph with {{repository_name}} not found".to_string(),
         })?;
 
-    // .ok_or_else(|| anyhow::anyhow!("Template paragraph with {{repository_name}} not found"))?;
+    println!(
+        "{:?}",
+        template_paragraph
+            .paragraph
+            .as_ref()
+            .expect("Should not be empty")
+    );
 
     let start_index = template_paragraph.start_index.unwrap();
     let end_index = template_paragraph.end_index.unwrap();
 
     let mut requests = Vec::new();
 
-    // Delete the template paragraph
-    requests.push(Request {
-        delete_content_range: Some(google_docs1::api::DeleteContentRangeRequest {
-            range: Some(google_docs1::api::Range {
-                segment_id: None,
-                start_index: Some(start_index),
-                end_index: Some(end_index),
-            }),
-        }),
-        ..Default::default()
-    });
+    let mut cursor = end_index;
 
-    // Adjust cursor after deletion
-    let mut cursor = start_index;
-
-    for (i, activity) in activities.iter().enumerate() {
+    for activity in activities.iter().filter(|a| !a.activities.is_empty()) {
         let text = template_paragraph
             .paragraph
             .as_ref()
@@ -182,19 +178,9 @@ pub async fn fill_placeholders(
             .elements
             .iter()
             .flat_map(|vec| vec.iter())
-            .filter_map(|paragraph| {
-                paragraph
-                    .text_run
-                    .as_ref()
-                    .map(|t| t.content.clone())
-                    .flatten()
-            })
+            .filter_map(|paragraph| paragraph.text_run.as_ref().and_then(|t| t.content.clone()))
             .collect::<String>()
             .replace("{repository_name}", &activity.repository);
-
-        let bullet_prefix = format!("{}. ", (b'a' + i as u8) as char);
-
-        let text = format!("{}{}", bullet_prefix, text);
 
         requests.push(Request {
             insert_text: Some(InsertTextRequest {
@@ -211,44 +197,46 @@ pub async fn fill_placeholders(
         let repo_line_end = cursor + text.len() as i32;
         cursor = repo_line_end;
 
-        if !text.is_empty() {
-            let end_index = repo_line_end;
-            let start_index = repo_line_end - text.len() as i32;
+        let end_index = repo_line_end;
+        let start_index = repo_line_end - text.len() as i32;
 
-            // Only apply bullets if we have a valid range
-            if start_index < end_index {
-                requests.push(Request {
-                    create_paragraph_bullets: Some(CreateParagraphBulletsRequest {
-                        range: Some(google_docs1::api::Range {
-                            start_index: Some(start_index),
-                            end_index: Some(end_index),
-                            segment_id: None,
-                        }),
-                        bullet_preset: Some("NUMBERED_DECIMAL_ALPHA_ROMAN".to_string()),
+        requests.push(Request {
+            create_paragraph_bullets: Some(CreateParagraphBulletsRequest {
+                range: Some(Range {
+                    start_index: Some(start_index),
+                    end_index: Some(end_index),
+                    segment_id: None,
+                }),
+                bullet_preset: Some("NUMBERED_DECIMAL_ALPHA_ROMAN".to_string()),
+            }),
+            ..Default::default()
+        });
+
+        requests.push(Request {
+            update_paragraph_style: Some(UpdateParagraphStyleRequest {
+                range: Some(Range {
+                    start_index: Some(start_index),
+                    end_index: Some(end_index),
+                    segment_id: None,
+                }),
+                paragraph_style: Some(ParagraphStyle {
+                    indent_start: Some(Dimension {
+                        magnitude: Some(36.0), // level 1 indent
+                        unit: Some("PT".to_string()),
                     }),
                     ..Default::default()
-                });
-            }
-        }
+                }),
+                fields: Some(FieldMask::new(&["indent_start"])),
+            }),
+            ..Default::default()
+        });
 
         for entry in &activity.activities {
-            let commit_text = entry.to_string();
-
-            if cursor > 0 && !commit_text.starts_with('\n') {
-                let newline = "\n";
-                requests.push(Request {
-                    insert_text: Some(InsertTextRequest {
-                        text: Some(newline.to_string()),
-                        location: Some(google_docs1::api::Location {
-                            index: Some(cursor),
-                            segment_id: None,
-                        }),
-                        end_of_segment_location: None,
-                    }),
-                    ..Default::default()
-                });
-                cursor += 1;
+            if entry.to_string().is_empty() {
+                continue;
             }
+
+            let commit_text = format!("{}", entry);
 
             requests.push(Request {
                 insert_text: Some(InsertTextRequest {
@@ -267,17 +255,47 @@ pub async fn fill_placeholders(
 
             requests.push(Request {
                 create_paragraph_bullets: Some(CreateParagraphBulletsRequest {
-                    range: Some(google_docs1::api::Range {
-                        segment_id: None,
+                    range: Some(Range {
                         start_index: Some(commit_line_end - commit_text.len() as i32),
                         end_index: Some(commit_line_end),
+                        segment_id: None,
                     }),
                     bullet_preset: Some("NUMBERED_DECIMAL_ALPHA_ROMAN".to_string()),
                 }),
                 ..Default::default()
             });
+
+            requests.push(Request {
+                update_paragraph_style: Some(UpdateParagraphStyleRequest {
+                    range: Some(Range {
+                        start_index: Some(commit_line_end - commit_text.len() as i32),
+                        end_index: Some(commit_line_end),
+                        segment_id: None,
+                    }),
+                    paragraph_style: Some(ParagraphStyle {
+                        indent_start: Some(Dimension {
+                            magnitude: Some(72.0),
+                            unit: Some("PT".to_string()),
+                        }),
+                        ..Default::default()
+                    }),
+                    fields: Some(FieldMask::new(&["indent_start"])),
+                }),
+                ..Default::default()
+            });
         }
     }
+    // Delete the template paragraph
+    requests.push(Request {
+        delete_content_range: Some(google_docs1::api::DeleteContentRangeRequest {
+            range: Some(google_docs1::api::Range {
+                segment_id: None,
+                start_index: Some(start_index),
+                end_index: Some(end_index),
+            }),
+        }),
+        ..Default::default()
+    });
 
     docs_client
         .documents()
@@ -287,7 +305,7 @@ pub async fn fill_placeholders(
                 // https://docs.google.com/document/d/1kBtF8xmB-qn4UtcoRQyRLgO0c70P2QLp-hldRmP_b5o/edit?tab=t.0
                 // generated doc
                 // λ cargo run -- --month 4 --user jborkowski --gh-token xxx
-                requests: Some(requests.split_at(129).0.to_vec()),
+                requests: Some(requests),
                 ..Default::default()
             },
             document_id,
